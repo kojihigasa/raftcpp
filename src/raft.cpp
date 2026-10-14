@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -36,19 +37,33 @@ struct RequestVoteResults {
     bool voteGranted;
 };
 
+struct AppendEntriesArgs {
+    int term;
+    int leaderId;
+    int prevLogIndex;
+    int prevLogTerm;
+    std::vector<LogEntry> entries;
+    int leaderCommit;
+};
+
+struct AppendEntriesResults {
+    int term;
+    bool success;
+};
+
 RequestVoteResults handleRequestVote(const RequestVoteArgs& args, State& state) {
-    RequestVoteResults response;
-    response.term = state.currentTerm;
-
-    if (args.term < state.currentTerm) {
-        response.voteGranted = false;
-        return response;
-    }
-
     if (args.term > state.currentTerm) {
         state.currentTerm = args.term;
         // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
         state.votedFor.reset();
+    }
+
+    RequestVoteResults results;
+    results.term = state.currentTerm;
+
+    if (args.term < state.currentTerm) {
+        results.voteGranted = false;
+        return results;
     }
 
     // Check if the candidate's log is at least as up-to-date as the receiver's log
@@ -60,10 +75,58 @@ RequestVoteResults handleRequestVote(const RequestVoteArgs& args, State& state) 
 
     if ((!state.votedFor.has_value() || state.votedFor.value() == args.candidateId) && logUpToDate) {
         state.votedFor = args.candidateId;
-        response.voteGranted = true;
+        results.voteGranted = true;
     } else {
-        response.voteGranted = false;
+        results.voteGranted = false;
     }
 
-    return response;
+    return results;
+}
+
+AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args, State& state) {
+    if (args.term > state.currentTerm) {
+        state.currentTerm = args.term;
+        // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
+        state.votedFor.reset();
+    }
+
+    AppendEntriesResults results;
+    results.term = state.currentTerm;
+
+    if (args.term < state.currentTerm) {
+        results.success = false;
+        return results;
+    }
+
+    // Check if the log contains an entry at prevLogIndex whose term matches prevLogTerm
+    // Raft maintains the following property to ensure the consistency of logs on different servers:
+    // If two entries in different logs have the same index and term, then the logs are identical in all preceding entries.
+    if (args.prevLogIndex > 0 && (args.prevLogIndex > static_cast<int>(state.log.size()) ||
+                                  state.log[args.prevLogIndex - 1].term != args.prevLogTerm)) {
+        results.success = false;
+        return results;
+    }
+
+    // If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
+    for (std::size_t i = 0; i < args.entries.size(); ++i) {
+        int logIndex = args.prevLogIndex + 1 + static_cast<int>(i);
+        if (logIndex <= static_cast<int>(state.log.size())) {
+            if (state.log[logIndex - 1].term != args.entries[i].term) {
+                state.log.resize(logIndex - 1);
+                break;
+            }
+        }
+    }
+
+    // Append any new entries not already in the log
+    for (const auto& entry : args.entries) {
+        state.log.push_back(entry);
+    }
+
+    if (args.leaderCommit > state.commitIndex) {
+        state.commitIndex = std::min(args.leaderCommit, static_cast<int>(state.log.size()));
+    }
+
+    results.success = true;
+    return results;
 }
