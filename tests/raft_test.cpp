@@ -221,48 +221,48 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleConfl
     EXPECT_EQ(state.log[2].command, "command3b");
 }
 
-TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIsGreaterThanFollowerCommitIndex) {
+TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIsSmallerThanIndexOfFollowerLastNewEntry) {
     State state;
     state.currentTerm = 1;
     state.votedFor = std::nullopt;
-    state.log = {{"command1", 1}, {"command2", 1}}; // Follower has same entries as leader has committed
+    state.log = {{"command1", 1}, {"command2", 1}};
     state.commitIndex = 0;
 
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
-    args.prevLogIndex = 2; // This index exists in the receiver's log
-    args.prevLogTerm = 1; // And the term matches
-    args.entries = {}; // No new entries
-    args.leaderCommit = 2; // Leader's commit index is greater than follower's commit index
+    args.prevLogIndex = 1;
+    args.prevLogTerm = 1;
+    args.entries = {{"command3", 1}};
+    args.leaderCommit = 2; // Leader's commit index (2) is smaller than index of follower's new entry (3)
 
     AppendEntriesResults results = handleAppendEntries(args, state);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
     EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.commitIndex, 2); // Follower's commit index should be updated to leader's commit index
+    EXPECT_EQ(state.commitIndex, 2); // Follower's commit index should be updated to leader's commit index (2)
 }
 
-TEST(AppendEntries, CommitIndexUpdatedToLastLogIndexWhenLeaderCommitIndexIsGreaterThanFollowerCommitIndexAndFollowerHasFewerEntriesThanLeader) {
+TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFollowerLastNewEntryIsSmallerThanLeaderCommitIndex) {
     State state;
     state.currentTerm = 1;
     state.votedFor = std::nullopt;
-    state.log = {{"command1", 1}}; // Follower has fewer entries than leader has committed
+    state.log = {{"command1", 1}};
     state.commitIndex = 0;
 
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
-    args.prevLogIndex = 1; // This index exists in the receiver's log
-    args.prevLogTerm = 1; // And the term matches
-    args.entries = {{"command2", 1}, {"command3", 1}}; // Leader has more new entries already committed
-    args.leaderCommit = 3; // Leader's commit index is greater than follower's commit index
+    args.prevLogIndex = 1;
+    args.prevLogTerm = 1;
+    args.entries = {{"command2", 1}};
+    args.leaderCommit = 3; // Leader's commit index (3) is greater than index of follower's new entry (2)
 
     AppendEntriesResults results = handleAppendEntries(args, state);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
     EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.commitIndex, 3); // Follower's commit index should be updated to the last log index (3)
+    EXPECT_EQ(state.commitIndex, 2); // Follower's commit index should be updated to index of follower's new entry (2)
 }
