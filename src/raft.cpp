@@ -1,5 +1,5 @@
-#include <algorithm>
 #include "raft.hpp"
+#include <algorithm>
 
 RequestVoteResults handleRequestVote(const RequestVoteArgs& args, State& state) {
     if (args.term > state.currentTerm) {
