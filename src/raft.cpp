@@ -58,7 +58,7 @@ AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args, State& s
     }
 
     // If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
-    for (std::size_t i = 0; i < args.entries.size(); ++i) {
+    for (std::size_t i = 0; i < args.entries.size(); i++) {
         int logIndex = args.prevLogIndex + 1 + static_cast<int>(i);
         if (logIndex <= static_cast<int>(state.log.size())) {
             if (state.log[logIndex - 1].term != args.entries[i].term) {
@@ -75,6 +75,15 @@ AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args, State& s
 
     if (args.leaderCommit > state.commitIndex) {
         state.commitIndex = std::min(args.leaderCommit, static_cast<int>(state.log.size()));
+    }
+
+    if (state.commitIndex > state.lastApplied) {
+        for (int i = state.lastApplied + 1; i <= state.commitIndex; i++) {
+            // Apply the log entry at index i to the state machine
+            // In a real implementation, this would involve executing the command in the log entry
+            // For this simplified version, we just update lastApplied
+            state.lastApplied = i;
+        }
     }
 
     results.success = true;

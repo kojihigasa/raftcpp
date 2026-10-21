@@ -234,7 +234,8 @@ TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIs
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command3", 1}};
-    args.leaderCommit = 2; // Leader's commit index (2) is smaller than index of follower's new entry (3)
+    // Leader's commit index (2) is greater than follower's commit index (0) and is smaller than index of follower's new entry (3).
+    args.leaderCommit = 2;
 
     AppendEntriesResults results = handleAppendEntries(args, state);
 
@@ -257,7 +258,8 @@ TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFo
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command2", 1}};
-    args.leaderCommit = 3; // Leader's commit index (3) is greater than index of follower's new entry (2)
+    // Leader's commit index (3) is greater than follwer's commit index (0) and index of follower's new entry (2).
+    args.leaderCommit = 3;
 
     AppendEntriesResults results = handleAppendEntries(args, state);
 
