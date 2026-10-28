@@ -1,8 +1,13 @@
 #pragma once
 
+#include <condition_variable>
 #include <cstddef>
+#include <deque>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 struct LogEntry {
@@ -25,6 +30,15 @@ struct State {
         nextIndex.assign(serverCount, nextLogIndex);
         matchIndex.assign(serverCount, 0);
     }
+};
+
+class StateMachine {
+public:
+    StateMachine() = default;
+    virtual ~StateMachine() = default;
+
+    // This method should be implemented by the user to apply a log entry to the state machine.
+    virtual bool applyLogEntry(const LogEntry& entry) = 0;
 };
 
 struct RequestVoteArgs {
@@ -53,5 +67,29 @@ struct AppendEntriesResults {
     bool success;
 };
 
-RequestVoteResults handleRequestVote(const RequestVoteArgs& args, State& state);
-AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args, State& state);
+class RaftNode {
+public:
+    RaftNode(State& state, StateMachine& stateMachine);
+    ~RaftNode();
+
+    RequestVoteResults handleRequestVote(const RequestVoteArgs& args);
+    AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args);
+
+private:
+    void applyLoop();
+    void enqueueCommittedEntries();
+
+    State& state_;
+    StateMachine& stateMachine_;
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::pair<int, LogEntry>> applyQueue_;
+
+    int lastEnqueued_ = 0;
+    bool terminating_ = false;
+    std::optional<int> applyFailed_;
+
+    // Declare at the end to ensure proper construction order
+    std::thread applyThread_;
+};

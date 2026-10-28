@@ -1,11 +1,21 @@
 #include "../src/raft.hpp"
 #include <gtest/gtest.h>
 
+class DummyStateMachine : public StateMachine {
+public:
+    bool applyLogEntry(const LogEntry& entry) override {
+        // For testing purposes, we can just return true to indicate that the log entry was applied
+        return true;
+    }
+};
+
 TEST(RequestVote, VoteDeniedWhenCandidateLogHasLowerTermThanFollowerLog) {
     State state;
     state.currentTerm = 2;
     state.votedFor = std::nullopt;
     state.log = {{"command1", 2}};
+
+    DummyStateMachine stateMachine; // Dummy state machine for testing
 
     RequestVoteArgs args;
     args.term = 1;
@@ -13,7 +23,7 @@ TEST(RequestVote, VoteDeniedWhenCandidateLogHasLowerTermThanFollowerLog) {
     args.lastLogIndex = 1;
     args.lastLogTerm = 1;
 
-    RequestVoteResults results = handleRequestVote(args, state);
+    RequestVoteResults results = RaftNode(state, stateMachine).handleRequestVote(args);
 
     EXPECT_EQ(results.term, 2);
     EXPECT_FALSE(results.voteGranted);
@@ -27,13 +37,15 @@ TEST(RequestVote, VoteGrantedWhenCandidateLogHasHigherTermThanFollowerLog) {
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     RequestVoteArgs args;
     args.term = 2;
     args.candidateId = 1;
     args.lastLogIndex = 1;
     args.lastLogTerm = 1;
 
-    RequestVoteResults results = handleRequestVote(args, state);
+    RequestVoteResults results = RaftNode(state, stateMachine).handleRequestVote(args);
 
     EXPECT_EQ(results.term, 2);
     EXPECT_TRUE(results.voteGranted);
@@ -47,13 +59,15 @@ TEST(RequestVote, VoteGrantedWhenCandidateLogHasSameTermButHigherIndexThanFollow
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     RequestVoteArgs args;
     args.term = 1;
     args.candidateId = 1;
     args.lastLogIndex = 2;
     args.lastLogTerm = 1;
 
-    RequestVoteResults results = handleRequestVote(args, state);
+    RequestVoteResults results = RaftNode(state, stateMachine).handleRequestVote(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.voteGranted);
@@ -67,6 +81,8 @@ TEST(AppendEntries, EntriesNotAppendedWhenLeaderTermIsLowerThanFollowerTerm) {
     state.votedFor = std::nullopt;
     state.log = {{"command1", 2}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1; // Lower term than currentTerm
     args.leaderId = 1;
@@ -75,7 +91,7 @@ TEST(AppendEntries, EntriesNotAppendedWhenLeaderTermIsLowerThanFollowerTerm) {
     args.entries = {{"command2", 1}};
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 2);
     EXPECT_FALSE(results.success);
@@ -89,6 +105,8 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatch) {
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -97,7 +115,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatch) {
     args.entries = {{"command2", 1}};
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
@@ -112,6 +130,8 @@ TEST(AppendEntries, EntriesNotAppendedWhenPrevLogIndexDoesNotExist) {
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -120,7 +140,7 @@ TEST(AppendEntries, EntriesNotAppendedWhenPrevLogIndexDoesNotExist) {
     args.entries = {{"command3", 1}};
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_FALSE(results.success);
@@ -134,6 +154,8 @@ TEST(AppendEntries, EntriesNotAppendedWhenPrevLogTermDoesNotMatch) {
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}, {"command2", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -142,7 +164,7 @@ TEST(AppendEntries, EntriesNotAppendedWhenPrevLogTermDoesNotMatch) {
     args.entries = {{"command3", 1}};
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_FALSE(results.success);
@@ -156,6 +178,8 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleEntri
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -164,7 +188,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleEntri
     args.entries = {{"command2", 1}, {"command3", 1}};
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
@@ -180,6 +204,8 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithConflictingEn
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}, {"command2a", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -188,7 +214,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithConflictingEn
     args.entries = {{"command2b", 2}}; // Conflicting entry (different term)
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
@@ -203,6 +229,8 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleConfl
     state.votedFor = std::nullopt;
     state.log = {{"command1", 1}, {"command2a", 1}, {"command3a", 1}};
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -211,7 +239,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleConfl
     args.entries = {{"command2b", 2}, {"command3b", 2}}; // Conflicting entries (different term)
     args.leaderCommit = 0;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
@@ -228,6 +256,8 @@ TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIs
     state.log = {{"command1", 1}, {"command2", 1}};
     state.commitIndex = 0;
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -237,7 +267,7 @@ TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIs
     // Leader's commit index (2) is greater than follower's commit index (0) and is smaller than index of follower's new entry (3).
     args.leaderCommit = 2;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
@@ -252,6 +282,8 @@ TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFo
     state.log = {{"command1", 1}};
     state.commitIndex = 0;
 
+    DummyStateMachine stateMachine; // Dummy state machine for testing
+
     AppendEntriesArgs args;
     args.term = 1;
     args.leaderId = 1;
@@ -261,7 +293,7 @@ TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFo
     // Leader's commit index (3) is greater than follwer's commit index (0) and index of follower's new entry (2).
     args.leaderCommit = 3;
 
-    AppendEntriesResults results = handleAppendEntries(args, state);
+    AppendEntriesResults results = RaftNode(state, stateMachine).handleAppendEntries(args);
 
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.success);
