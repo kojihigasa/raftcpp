@@ -118,7 +118,7 @@ void RaftNode::applyLoop() {
         }
 
         auto [index, entry] = applyQueue_.front();
-        applyQueue_.pop_front();
+        applyQueue_.pop();
         lock.unlock();
 
         if (!stateMachine_.applyLogEntry(entry)) {
@@ -136,7 +136,7 @@ void RaftNode::enqueueCommittedEntries() {
         std::lock_guard<std::mutex> lock(mutex_);
         while (lastEnqueued_ < state_.commitIndex) {
             const int index = lastEnqueued_ + 1;
-            applyQueue_.emplace_back(index, state_.log[index - 1]);
+            applyQueue_.push({index, state_.log[index - 1]});
             lastEnqueued_ = index;
         }
     }

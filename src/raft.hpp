@@ -2,7 +2,7 @@
 
 #include <condition_variable>
 #include <cstddef>
-#include <deque>
+#include <queue>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -84,7 +84,7 @@ private:
 
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::deque<std::pair<int, LogEntry>> applyQueue_;
+    std::queue<std::pair<int, LogEntry>> applyQueue_;
 
     int lastEnqueued_ = 0;
     bool terminating_ = false;
