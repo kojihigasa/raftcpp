@@ -32,6 +32,12 @@ struct State {
     }
 };
 
+enum class RaftState : int {
+    Follower,
+    Candidate,
+    Leader
+};
+
 class StateMachine {
 public:
     StateMachine() = default;
@@ -82,14 +88,14 @@ private:
     State& state_;
     StateMachine& stateMachine_;
 
+    RaftState raftState_ = RaftState::Follower;
+
+    // Private members for asynchronous application of committed log entries to the state machine
     std::mutex mutex_;
     std::condition_variable cv_;
     std::queue<std::pair<int, LogEntry>> applyQueue_;
-
-    int lastEnqueued_ = 0;
-    bool terminating_ = false;
-    std::optional<int> applyFailed_;
-
-    // Declare at the end to ensure proper construction order
-    std::thread applyThread_;
+    int lastEnqueued_ = 0; // The index of the last log entry that has been enqueued for application to the state machine
+    bool terminating_ = false; // Flag to indicate that the RaftServer is being destroyed and the applyLoop should terminate
+    std::optional<int> applyFailed_; // The index of the first log entry that failed to be applied to the state machine
+    std::thread applyThread_; // Declare at the end to ensure proper construction order
 };
