@@ -27,6 +27,10 @@ RequestVoteResults RaftServer::handleRequestVote(const RequestVoteArgs& args) {
         state_.currentTerm = args.term;
         // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
         state_.votedFor.reset();
+        // If the candidate's term is greater than the current term, the server should transition to the follower state.
+        // Note: RequestVote RPCs are send to all servers, so they may be received by a server that is currently a candidate
+        // or a leader who looks being unable to communicate with a majority of the servers in the cluster.
+        raftState_ = RaftState::Follower;
     }
 
     RequestVoteResults results;
@@ -59,6 +63,11 @@ AppendEntriesResults RaftServer::handleAppendEntries(const AppendEntriesArgs& ar
         state_.currentTerm = args.term;
         // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
         state_.votedFor.reset();
+        // If the leader's term is greater than the current term, the server should transition to the follower state.
+        // Note: AppendEntries RPCs are sent to all servers, so they may be received by a server that is currently a "leader",
+        // e.g., who belonged to a small partition of the cluster and joined the whole cluster again after network partition recovered,
+        // or a candidate waiting for votes while the leader comes reachable again after an intermittent issue.
+        raftState_ = RaftState::Follower;
     }
 
     AppendEntriesResults results;
@@ -121,6 +130,7 @@ void RaftServer::applyLoop() {
         applyQueue_.pop();
         lock.unlock();
 
+        // Apply the log entry to the state machine
         bool applied = stateMachine_.applyLogEntry(entry);
         if (!applied) {
             std::lock_guard<std::mutex> lock(mutex_);
