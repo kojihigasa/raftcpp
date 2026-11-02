@@ -67,10 +67,10 @@ struct AppendEntriesResults {
     bool success;
 };
 
-class RaftNode {
+class RaftServer {
 public:
-    RaftNode(State& state, StateMachine& stateMachine);
-    ~RaftNode();
+    RaftServer(State& state, StateMachine& stateMachine);
+    ~RaftServer();
 
     RequestVoteResults handleRequestVote(const RequestVoteArgs& args);
     AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args);

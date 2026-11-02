@@ -1,15 +1,15 @@
 #include "raft.hpp"
 #include <algorithm>
 
-RaftNode::RaftNode(State& state, StateMachine& stateMachine)
+RaftServer::RaftServer(State& state, StateMachine& stateMachine)
     : state_(state),
       stateMachine_(stateMachine),
       lastEnqueued_(state.lastApplied) {
     // Initialize at the body of the constructor to ensure that the applyThread_ is started after all member variables are initialized.
-    applyThread_ = std::thread(&RaftNode::applyLoop, this);
+    applyThread_ = std::thread(&RaftServer::applyLoop, this);
 }
 
-RaftNode::~RaftNode() {
+RaftServer::~RaftServer() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         terminating_ = true;
@@ -22,7 +22,7 @@ RaftNode::~RaftNode() {
     }
 }
 
-RequestVoteResults RaftNode::handleRequestVote(const RequestVoteArgs& args) {
+RequestVoteResults RaftServer::handleRequestVote(const RequestVoteArgs& args) {
     if (args.term > state_.currentTerm) {
         state_.currentTerm = args.term;
         // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
@@ -54,7 +54,7 @@ RequestVoteResults RaftNode::handleRequestVote(const RequestVoteArgs& args) {
     return results;
 }
 
-AppendEntriesResults RaftNode::handleAppendEntries(const AppendEntriesArgs& args) {
+AppendEntriesResults RaftServer::handleAppendEntries(const AppendEntriesArgs& args) {
     if (args.term > state_.currentTerm) {
         state_.currentTerm = args.term;
         // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
@@ -106,7 +106,7 @@ AppendEntriesResults RaftNode::handleAppendEntries(const AppendEntriesArgs& args
     return results;
 }
 
-void RaftNode::applyLoop() {
+void RaftServer::applyLoop() {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait(lock, [this] {
@@ -121,7 +121,8 @@ void RaftNode::applyLoop() {
         applyQueue_.pop();
         lock.unlock();
 
-        if (!stateMachine_.applyLogEntry(entry)) {
+        bool applied = stateMachine_.applyLogEntry(entry);
+        if (!applied) {
             std::lock_guard<std::mutex> lock(mutex_);
             applyFailed_ = index;
             break;
@@ -131,7 +132,7 @@ void RaftNode::applyLoop() {
     }
 }
 
-void RaftNode::enqueueCommittedEntries() {
+void RaftServer::enqueueCommittedEntries() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         while (lastEnqueued_ < state_.commitIndex) {
