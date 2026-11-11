@@ -1,6 +1,6 @@
 #include "../src/raft.hpp"
-#include <chrono>
 #include <future>
+#include <regex>
 #include <gtest/gtest.h>
 
 // Empty state machine implementation for RPC testing purposes.
@@ -12,6 +12,30 @@ public:
     }
 };
 
+TEST(GenerateUniqueServerId, CorrectlyGeneratesUUIDv7Format) {
+    State state;
+    EmptyStateMachine stateMachine;
+    RaftServer raftServer(state, stateMachine);
+
+    const std::string& id = raftServer.getServerId();
+
+    const std::regex uuidV7Pattern(
+        "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    );
+    EXPECT_TRUE(std::regex_match(id, uuidV7Pattern));
+}
+
+TEST(GenerateUniqueServerId, GeneratesUniqueIdsForDifferentInstances) {
+    State firstState;
+    State secondState;
+    EmptyStateMachine stateMachine;
+
+    RaftServer first(firstState, stateMachine);
+    RaftServer second(secondState, stateMachine);
+
+    EXPECT_NE(first.getServerId(), second.getServerId());
+}
+
 TEST(RequestVote, VoteDeniedWhenCandidateLogHasLowerTermThanFollowerLog) {
     State state;
     state.currentTerm = 2;
@@ -22,7 +46,7 @@ TEST(RequestVote, VoteDeniedWhenCandidateLogHasLowerTermThanFollowerLog) {
 
     RequestVoteArgs args{};
     args.term = 1;
-    args.candidateId = 1;
+    args.candidateId = "server1";
     args.lastLogIndex = 1;
     args.lastLogTerm = 1;
 
@@ -44,7 +68,7 @@ TEST(RequestVote, VoteGrantedWhenCandidateLogHasHigherTermThanFollowerLog) {
 
     RequestVoteArgs args{};
     args.term = 2;
-    args.candidateId = 1;
+    args.candidateId = "server1";
     args.lastLogIndex = 1;
     args.lastLogTerm = 1;
 
@@ -53,7 +77,7 @@ TEST(RequestVote, VoteGrantedWhenCandidateLogHasHigherTermThanFollowerLog) {
     EXPECT_EQ(results.term, 2);
     EXPECT_TRUE(results.voteGranted);
     EXPECT_EQ(state.currentTerm, 2);
-    EXPECT_EQ(state.votedFor.value(), 1);
+    EXPECT_EQ(state.votedFor.value(), "server1");
 }
 
 TEST(RequestVote, VoteGrantedWhenCandidateLogHasSameTermButHigherIndexThanFollowerLog) {
@@ -66,7 +90,7 @@ TEST(RequestVote, VoteGrantedWhenCandidateLogHasSameTermButHigherIndexThanFollow
 
     RequestVoteArgs args{};
     args.term = 1;
-    args.candidateId = 1;
+    args.candidateId = "server1";
     args.lastLogIndex = 2;
     args.lastLogTerm = 1;
 
@@ -75,7 +99,7 @@ TEST(RequestVote, VoteGrantedWhenCandidateLogHasSameTermButHigherIndexThanFollow
     EXPECT_EQ(results.term, 1);
     EXPECT_TRUE(results.voteGranted);
     EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.votedFor.value(), 1);
+    EXPECT_EQ(state.votedFor.value(), "server1");
 }
 
 TEST(AppendEntries, EntriesNotAppendedWhenLeaderTermIsLowerThanFollowerTerm) {
@@ -88,7 +112,7 @@ TEST(AppendEntries, EntriesNotAppendedWhenLeaderTermIsLowerThanFollowerTerm) {
 
     AppendEntriesArgs args{};
     args.term = 1; // Lower term than currentTerm
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command2", 1}};
@@ -112,7 +136,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatch) {
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command2", 1}};
@@ -137,7 +161,7 @@ TEST(AppendEntries, EntriesNotAppendedWhenPrevLogIndexDoesNotExist) {
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 2; // This index does not exist in the receiver's log
     args.prevLogTerm = 1;
     args.entries = {{"command3", 1}};
@@ -161,7 +185,7 @@ TEST(AppendEntries, EntriesNotAppendedWhenPrevLogTermDoesNotMatch) {
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 2; // This index exists in the receiver's log
     args.prevLogTerm = 2; // But the term does not match
     args.entries = {{"command3", 1}};
@@ -185,7 +209,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleEntri
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command2", 1}, {"command3", 1}};
@@ -211,7 +235,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithConflictingEn
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1; // This index exists in the receiver's log
     args.prevLogTerm = 1; // And the term matches
     args.entries = {{"command2b", 2}}; // Conflicting entry (different term)
@@ -236,7 +260,7 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleConfl
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1; // This index exists in the receiver's log
     args.prevLogTerm = 1; // And the term matches
     args.entries = {{"command2b", 2}, {"command3b", 2}}; // Conflicting entries (different term)
@@ -263,7 +287,7 @@ TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIs
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command3", 1}};
@@ -289,7 +313,7 @@ TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFo
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.prevLogIndex = 1;
     args.prevLogTerm = 1;
     args.entries = {{"command2", 1}};
@@ -344,7 +368,7 @@ TEST(AsyncApply, AppliesCommittedEntriesInOrderWithoutDuplicates) {
 
         AppendEntriesArgs firstAppend{};
         firstAppend.term = 1;
-        firstAppend.leaderId = 1;
+        firstAppend.leaderId = "server1";
         firstAppend.entries = {{"command1", 1}, {"command2", 1}};
         firstAppend.leaderCommit = 1;
 
@@ -354,7 +378,7 @@ TEST(AsyncApply, AppliesCommittedEntriesInOrderWithoutDuplicates) {
 
         AppendEntriesArgs commitSecondEntry{};
         commitSecondEntry.term = 1;
-        commitSecondEntry.leaderId = 1;
+        commitSecondEntry.leaderId = "server1";
         commitSecondEntry.prevLogIndex = 2;
         commitSecondEntry.prevLogTerm = 1;
         commitSecondEntry.leaderCommit = 2;
@@ -413,7 +437,7 @@ TEST(AsyncApply, AppendEntriesReturnsWhileStateMachineIsBlocked) {
 
     AppendEntriesArgs args{};
     args.term = 1;
-    args.leaderId = 1;
+    args.leaderId = "server1";
     args.entries = {{"command1", 1}};
     args.leaderCommit = 1;
 
