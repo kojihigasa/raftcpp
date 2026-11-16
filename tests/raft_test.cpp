@@ -23,145 +23,125 @@ public:
     }
 };
 
-TEST(GenerateUniqueServerId, CorrectlyGeneratesUUIDv7Format) {
-    State state;
+TEST(GenerateUniqueServerId, ReturnsUuidV7FormattedId) {
+    State initialState{};
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    const std::string& id = raftServer.getServerId();
+    const std::string serverId = raftServer.getServerId();
 
-    const std::regex uuidV7Pattern(
+    const std::regex uuidV7Format(
         "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     );
-    EXPECT_TRUE(std::regex_match(id, uuidV7Pattern));
+    EXPECT_TRUE(std::regex_match(serverId, uuidV7Format));
 }
 
-TEST(GenerateUniqueServerId, GeneratesUniqueIdsForDifferentInstances) {
-    State firstState;
-    State secondState;
+TEST(GenerateUniqueServerId, GeneratesDistinctIdsForSeparateServers) {
+    State firstInitialState{};
+    State secondInitialState{};
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
 
-    RaftServer first(firstState, stateMachine, transport, {});
-    RaftServer second(secondState, stateMachine, transport, {});
+    RaftServer firstServer(firstInitialState, stateMachine, transport, {});
+    RaftServer secondServer(secondInitialState, stateMachine, transport, {});
 
-    EXPECT_NE(first.getServerId(), second.getServerId());
+    const std::string firstServerId = firstServer.getServerId();
+    const std::string secondServerId = secondServer.getServerId();
+    EXPECT_NE(firstServerId, secondServerId);
 }
 
-TEST(RequestVote, VoteDeniedWhenCandidateLogHasLowerTermThanFollowerLog) {
-    State state {
+TEST(RequestVote, RejectsCandidateWithOutdatedLog) {
+    State initialState{
         .currentTerm = 2,
         .votedFor = std::nullopt,
         .log = {{"command1", 2}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    RequestVoteArgs args{
-        .term = 1,
-        .candidateId = "server1",
-        .lastLogIndex = 1,
-        .lastLogTerm = 1
-    };
-
-    RequestVoteResults results = raftServer.requestVote(args);
-
-    EXPECT_EQ(results.term, 2);
-    EXPECT_FALSE(results.voteGranted);
-    EXPECT_EQ(state.currentTerm, 2);
-    EXPECT_EQ(state.votedFor, std::nullopt);
-}
-
-TEST(RequestVote, VoteGrantedWhenCandidateLogHasHigherTermThanFollowerLog) {
-    State state {
-        .currentTerm = 1,
-        .votedFor = std::nullopt,
-        .log = {{"command1", 1}}
-    };
-    EmptyStateMachine stateMachine;
-    RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
-
-    RequestVoteArgs args{
+    const RequestVoteArgs request{
         .term = 2,
         .candidateId = "server1",
         .lastLogIndex = 1,
         .lastLogTerm = 1
     };
 
-    RequestVoteResults results = raftServer.requestVote(args);
+    const RequestVoteResults response = raftServer.requestVote(request);
+    const State stateAfterRequest = raftServer.getState();
 
-    EXPECT_EQ(results.term, 2);
-    EXPECT_TRUE(results.voteGranted);
-    EXPECT_EQ(state.currentTerm, 2);
-    EXPECT_EQ(state.votedFor.value(), "server1");
+    EXPECT_EQ(response.term, 2);
+    EXPECT_FALSE(response.voteGranted);
+    EXPECT_EQ(stateAfterRequest.currentTerm, 2);
+    EXPECT_FALSE(stateAfterRequest.votedFor.has_value());
 }
 
-TEST(RequestVote, VoteGrantedWhenCandidateLogHasSameTermButHigherIndexThanFollowerLog) {
-    State state {
+TEST(RequestVote, GrantsVoteAndAdvancesTermForNewerCandidate) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    RequestVoteArgs args{
+    const RequestVoteArgs request{
+        .term = 2,
+        .candidateId = "server1",
+        .lastLogIndex = 1,
+        .lastLogTerm = 1
+    };
+
+    const RequestVoteResults response = raftServer.requestVote(request);
+    const State stateAfterRequest = raftServer.getState();
+
+    EXPECT_EQ(response.term, 2);
+    EXPECT_TRUE(response.voteGranted);
+    EXPECT_EQ(stateAfterRequest.currentTerm, 2);
+    ASSERT_TRUE(stateAfterRequest.votedFor.has_value());
+    EXPECT_EQ(stateAfterRequest.votedFor.value(), "server1");
+}
+
+TEST(RequestVote, GrantsVoteToCandidateWithLongerLogAtSameTerm) {
+    State initialState{
+        .currentTerm = 1,
+        .votedFor = std::nullopt,
+        .log = {{"command1", 1}}
+    };
+    EmptyStateMachine stateMachine;
+    RaftTransportMock transport;
+    RaftServer raftServer(initialState, stateMachine, transport, {});
+
+    const RequestVoteArgs request{
         .term = 1,
         .candidateId = "server1",
         .lastLogIndex = 2,
         .lastLogTerm = 1
     };
 
-    RequestVoteResults results = raftServer.requestVote(args);
+    const RequestVoteResults response = raftServer.requestVote(request);
+    const State stateAfterRequest = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.voteGranted);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.votedFor.value(), "server1");
+    EXPECT_EQ(response.term, 1);
+    EXPECT_TRUE(response.voteGranted);
+    EXPECT_EQ(stateAfterRequest.currentTerm, 1);
+    ASSERT_TRUE(stateAfterRequest.votedFor.has_value());
+    EXPECT_EQ(stateAfterRequest.votedFor.value(), "server1");
 }
 
-TEST(AppendEntries, EntriesNotAppendedWhenLeaderTermIsLowerThanFollowerTerm) {
-    State state {
+TEST(AppendEntries, RejectsAppendFromOlderTerm) {
+    State initialState{
         .currentTerm = 2,
         .votedFor = std::nullopt,
         .log = {{"command1", 2}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
-        .term = 1, // Lower term than currentTerm
-        .leaderId = "server1",
-        .prevLogIndex = 1,
-        .prevLogTerm = 1,
-        .entries = {{"command2", 1}},
-        .leaderCommit = 0
-    };
-
-    AppendEntriesResults results = raftServer.appendEntries(args);
-
-    EXPECT_EQ(results.term, 2);
-    EXPECT_FALSE(results.success);
-    EXPECT_EQ(state.currentTerm, 2);
-    EXPECT_EQ(state.log.size(), 1); // Log should remain unchanged
-}
-
-TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatch) {
-    State state {
-        .currentTerm = 1,
-        .votedFor = std::nullopt,
-        .log = {{"command1", 1}}
-    };
-    EmptyStateMachine stateMachine;
-    RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
-
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
         .prevLogIndex = 1,
@@ -170,80 +150,110 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatch) {
         .leaderCommit = 0
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.log.size(), 2);
-    EXPECT_EQ(state.log[1].command, "command2");
+    EXPECT_EQ(response.term, 2);
+    EXPECT_FALSE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 2);
+    EXPECT_EQ(stateAfterAppend.log.size(), 1);
 }
 
-TEST(AppendEntries, EntriesNotAppendedWhenPrevLogIndexDoesNotExist) {
-    State state {
+TEST(AppendEntries, AppendsEntriesWhenPreviousLogMatches) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
-        .prevLogIndex = 2, // This index does not exist in the receiver's log
+        .prevLogIndex = 1,
+        .prevLogTerm = 1,
+        .entries = {{"command2", 1}},
+        .leaderCommit = 0
+    };
+
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
+
+    EXPECT_EQ(response.term, 1);
+    EXPECT_TRUE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 2);
+    EXPECT_EQ(stateAfterAppend.log[1].command, "command2");
+}
+
+TEST(AppendEntries, RejectsAppendWhenPreviousIndexIsMissing) {
+    State initialState{
+        .currentTerm = 1,
+        .votedFor = std::nullopt,
+        .log = {{"command1", 1}}
+    };
+    EmptyStateMachine stateMachine;
+    RaftTransportMock transport;
+    RaftServer raftServer(initialState, stateMachine, transport, {});
+
+    const AppendEntriesArgs appendArgs{
+        .term = 1,
+        .leaderId = "server1",
+        .prevLogIndex = 2,
         .prevLogTerm = 1,
         .entries = {{"command3", 1}},
         .leaderCommit = 0
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_FALSE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.log.size(), 1); // Log should remain unchanged
+    EXPECT_EQ(response.term, 1);
+    EXPECT_FALSE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 1);
 }
 
-TEST(AppendEntries, EntriesNotAppendedWhenPrevLogTermDoesNotMatch) {
-    State state {
+TEST(AppendEntries, RejectsAppendWhenPreviousTermDiffers) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}, {"command2", 1}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
-        .prevLogIndex = 2, // This index exists in the receiver's log
-        .prevLogTerm = 2, // But the term does not match
+        .prevLogIndex = 2,
+        .prevLogTerm = 2,
         .entries = {{"command3", 1}},
         .leaderCommit = 0
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
-
-    EXPECT_EQ(results.term, 1);
-    EXPECT_FALSE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.log.size(), 2); // Log should remain unchanged
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
+    EXPECT_EQ(response.term, 1);
+    EXPECT_FALSE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 2);
 }
 
-TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleEntries) {
-    State state {
+TEST(AppendEntries, AppendsMultipleEntriesWhenPreviousLogMatches) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
         .prevLogIndex = 1,
@@ -252,75 +262,77 @@ TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleEntri
         .leaderCommit = 0
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.log.size(), 3);
-    EXPECT_EQ(state.log[1].command, "command2");
-    EXPECT_EQ(state.log[2].command, "command3");
+    EXPECT_EQ(response.term, 1);
+    EXPECT_TRUE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 3);
+    EXPECT_EQ(stateAfterAppend.log[1].command, "command2");
+    EXPECT_EQ(stateAfterAppend.log[2].command, "command3");
 }
 
-TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithConflictingEntry) {
-    State state {
+TEST(AppendEntries, ReplacesConflictingEntry) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}, {"command2a", 1}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
-        .prevLogIndex = 1, // This index exists in the receiver's log
-        .prevLogTerm = 1, // And the term matches
-        .entries = {{"command2b", 2}}, // Conflicting entry (different term)
+        .prevLogIndex = 1,
+        .prevLogTerm = 1,
+        .entries = {{"command2b", 2}},
         .leaderCommit = 0
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.log.size(), 2); // Log should be truncated to the conflicting entry
-    EXPECT_EQ(state.log[1].command, "command2b");
+    EXPECT_EQ(response.term, 1);
+    EXPECT_TRUE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 2);
+    EXPECT_EQ(stateAfterAppend.log[1].command, "command2b");
 }
 
-TEST(AppendEntries, EntriesAppendedWhenPrevLogIndexAndTermMatchWithMultipleConflictingEntries) {
-    State state {
+TEST(AppendEntries, ReplacesMultipleConflictingEntries) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}, {"command2a", 1}, {"command3a", 1}}
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
-        .prevLogIndex = 1, // This index exists in the receiver's log
-        .prevLogTerm = 1, // And the term matches
-        .entries = {{"command2b", 2}, {"command3b", 2}}, // Conflicting entries (different term)
+        .prevLogIndex = 1,
+        .prevLogTerm = 1,
+        .entries = {{"command2b", 2}, {"command3b", 2}},
         .leaderCommit = 0
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
-
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.log.size(), 3); // Log should be truncated to the conflicting entries
-    EXPECT_EQ(state.log[1].command, "command2b");
-    EXPECT_EQ(state.log[2].command, "command3b");
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
+    EXPECT_EQ(response.term, 1);
+    EXPECT_TRUE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 3);
+    EXPECT_EQ(stateAfterAppend.log[1].command, "command2b");
+    EXPECT_EQ(stateAfterAppend.log[2].command, "command3b");
 }
 
-TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIsSmallerThanIndexOfFollowerLastNewEntry) {
-    State state {
+TEST(AppendEntries, CommitIndexFollowsLeaderCommitWhenWithinLog) {
+    State initialState{
         .currentTerm = 1,
         .votedFor = std::nullopt,
         .log = {{"command1", 1}, {"command2", 1}},
@@ -328,9 +340,9 @@ TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIs
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
         .prevLogIndex = 1,
@@ -339,26 +351,26 @@ TEST(AppendEntries, CommitIndexUpdatedToLeaderCommitIndexWhenLeaderCommitIndexIs
         .leaderCommit = 2
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.commitIndex, 2); // Follower's commit index should be updated to leader's commit index (2)
+    EXPECT_EQ(response.term, 1);
+    EXPECT_TRUE(response.success);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.commitIndex, 2);
 }
 
-TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFollowerLastNewEntryIsSmallerThanLeaderCommitIndex) {
-    State state {
+TEST(AppendEntries, CommitIndexIsCappedAtLastLogIndex) {
+    State initialState{
         .currentTerm = 1,
-        .votedFor = std::nullopt,
         .log = {{"command1", 1}},
         .commitIndex = 0
     };
     EmptyStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
         .prevLogIndex = 1,
@@ -367,12 +379,14 @@ TEST(AppendEntries, CommitIndexUpdatedToIndexOfFollowerLastNewEntryWhenIndexOfFo
         .leaderCommit = 3
     };
 
-    AppendEntriesResults results = raftServer.appendEntries(args);
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
 
-    EXPECT_EQ(results.term, 1);
-    EXPECT_TRUE(results.success);
-    EXPECT_EQ(state.currentTerm, 1);
-    EXPECT_EQ(state.commitIndex, 2); // Follower's commit index should be updated to index of follower's new entry (2)
+    EXPECT_TRUE(response.success);
+    EXPECT_EQ(response.term, 1);
+    EXPECT_EQ(stateAfterAppend.currentTerm, 1);
+    EXPECT_EQ(stateAfterAppend.log.size(), 2);
+    EXPECT_EQ(stateAfterAppend.commitIndex, 2);
 }
 
 class RecordingStateMachine : public StateMachine {
@@ -406,41 +420,43 @@ private:
 };
 
 TEST(AsyncApply, AppliesCommittedEntriesInOrderWithoutDuplicates) {
-    State state {.currentTerm = 1};
+    State initialState{.currentTerm = 1};
     RecordingStateMachine stateMachine;
+    State stateAfterApply{};
 
     {
         RaftTransportMock transport;
-        RaftServer raftServer(state, stateMachine, transport, {});
+        RaftServer raftServer(initialState, stateMachine, transport, {});
 
-        AppendEntriesArgs firstAppend{
+        const AppendEntriesArgs appendTwoEntries{
             .term = 1,
             .leaderId = "server1",
             .entries = {{"command1", 1}, {"command2", 1}},
             .leaderCommit = 1
         };
-
-        AppendEntriesResults firstResults = raftServer.appendEntries(firstAppend);
-        ASSERT_TRUE(firstResults.success);
+        const AppendEntriesResults firstResponse = raftServer.appendEntries(appendTwoEntries);
+        ASSERT_TRUE(firstResponse.success);
         ASSERT_TRUE(stateMachine.waitForAppliedCount(1, std::chrono::seconds(1)));
 
-        AppendEntriesArgs commitSecondEntry{
+        const AppendEntriesArgs commitSecondEntry{
             .term = 1,
             .leaderId = "server1",
             .prevLogIndex = 2,
             .prevLogTerm = 1,
             .leaderCommit = 2
         };
-
-        AppendEntriesResults secondResults = raftServer.appendEntries(commitSecondEntry);
-        EXPECT_TRUE(secondResults.success);
+        const AppendEntriesResults secondResponse = raftServer.appendEntries(commitSecondEntry);
+        ASSERT_TRUE(secondResponse.success);
         ASSERT_TRUE(stateMachine.waitForAppliedCount(2, std::chrono::seconds(1)));
 
-        AppendEntriesResults repeatedResults = raftServer.appendEntries(commitSecondEntry);
-        EXPECT_TRUE(repeatedResults.success);
+        // Repeating the same commit must not apply either entry again.
+        const AppendEntriesResults repeatedResponse = raftServer.appendEntries(commitSecondEntry);
+        ASSERT_TRUE(repeatedResponse.success);
+        stateAfterApply = raftServer.getState();
     }
 
-    EXPECT_EQ(state.lastApplied, 2);
+    // Destroying RaftServer joins its apply worker before inspecting final effects.
+    EXPECT_EQ(stateAfterApply.lastApplied, 2);
     EXPECT_EQ(stateMachine.appliedCommands(), (std::vector<std::string>{"command1", "command2"}));
 }
 
@@ -479,29 +495,33 @@ private:
 };
 
 TEST(AsyncApply, AppendEntriesReturnsWhileStateMachineIsBlocked) {
-    State state {.currentTerm = 1};
+    State initialState{.currentTerm = 1};
     BlockingStateMachine stateMachine;
     RaftTransportMock transport;
-    RaftServer raftServer(state, stateMachine, transport, {});
+    RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    AppendEntriesArgs args{
+    const AppendEntriesArgs appendArgs{
         .term = 1,
         .leaderId = "server1",
         .entries = {{"command1", 1}},
         .leaderCommit = 1
     };
 
-    auto result = std::async(std::launch::async, [&raftServer, args] {
-        return raftServer.appendEntries(args);
+    auto appendFuture = std::async(std::launch::async, [&raftServer, appendArgs] {
+        return raftServer.appendEntries(appendArgs);
     });
 
-    const bool applyStarted = stateMachine.waitUntilStarted(std::chrono::seconds(1));
-    const bool returnedWhileBlocked = result.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
-    stateMachine.release();
+    const auto timeout = std::chrono::seconds(1);
+    const bool stateMachineStarted = stateMachine.waitUntilStarted(timeout);
+    const bool appendReturnedBeforeApplyFinished =
+        appendFuture.wait_for(timeout) == std::future_status::ready;
 
-    const AppendEntriesResults appendResults = result.get();
-    EXPECT_TRUE(applyStarted);
-    EXPECT_TRUE(returnedWhileBlocked);
+    // Always unblock the worker before waiting on the future or making assertions.
+    stateMachine.release();
+    const AppendEntriesResults appendResults = appendFuture.get();
+
+    EXPECT_TRUE(stateMachineStarted);
+    EXPECT_TRUE(appendReturnedBeforeApplyFinished);
     EXPECT_TRUE(appendResults.success);
 }
 
@@ -549,79 +569,99 @@ private:
 };
 
 TEST(RequestVoteCallback, BecomesLeaderAfterMajorityGrantsVote) {
-    State state;
+    State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    RaftServer raftServer(state, stateMachine, transport, {"peer-1", "peer-2"});
+    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
-    ASSERT_TRUE(transport.waitForRequestCount(2, std::chrono::seconds(2)));
-    const auto request = transport.requestArgs(0);
+    ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Candidate);
+
+    const RequestVoteArgs request = transport.requestArgs(0);
     transport.respond(0, {request.term, true});
 
-    EXPECT_EQ(state.currentTerm, request.term);
+    const State stateAfterResponse = raftServer.getState();
+    EXPECT_EQ(stateAfterResponse.currentTerm, request.term);
     EXPECT_EQ(raftServer.getRaftState(), RaftState::Leader);
 }
 
 TEST(RequestVoteCallback, RejectedVoteDoesNotMakeCandidateLeader) {
-    State state;
+    State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    RaftServer raftServer(state, stateMachine, transport, {"peer-1", "peer-2"});
+    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
-    ASSERT_TRUE(transport.waitForRequestCount(2, std::chrono::seconds(2)));
-    const auto request = transport.requestArgs(0);
+    ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Candidate);
+
+    const RequestVoteArgs request = transport.requestArgs(0);
     transport.respond(0, {request.term, false});
 
-    EXPECT_EQ(state.currentTerm, request.term);
-    EXPECT_NE(raftServer.getRaftState(), RaftState::Leader);
+    const State stateAfterResponse = raftServer.getState();
+    EXPECT_EQ(stateAfterResponse.currentTerm, request.term);
+    EXPECT_EQ(raftServer.getRaftState(), RaftState::Candidate);
 }
 
 TEST(RequestVoteCallback, HigherTermResponseMakesServerFollower) {
-    State state;
+    State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    RaftServer raftServer(state, stateMachine, transport, {"peer-1", "peer-2"});
+    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
-    ASSERT_TRUE(transport.waitForRequestCount(2, std::chrono::seconds(2)));
-    const auto request = transport.requestArgs(0);
-    transport.respond(0, {request.term + 1, false});
+    ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Candidate);
 
-    EXPECT_EQ(state.currentTerm, request.term + 1);
-    EXPECT_EQ(state.votedFor, std::nullopt);
+    const std::uint64_t electionTerm = transport.requestArgs(0).term;
+    const std::uint64_t higherTerm = electionTerm + 1;
+    transport.respond(0, {higherTerm, false});
+
+    const State stateAfterResponse = raftServer.getState();
+    EXPECT_EQ(stateAfterResponse.currentTerm, higherTerm);
+    EXPECT_FALSE(stateAfterResponse.votedFor.has_value());
     EXPECT_EQ(raftServer.getRaftState(), RaftState::Follower);
 }
 
 TEST(RequestVoteCallback, IgnoresResponseFromOlderElection) {
-    State state;
+    State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    RaftServer raftServer(state, stateMachine, transport, {"peer-1", "peer-2"});
+    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    const std::size_t requestsPerElection = peerIds.size();
+    RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
-    ASSERT_TRUE(transport.waitForRequestCount(2, std::chrono::seconds(2)));
-    const auto oldRequest = transport.requestArgs(0);
+    ASSERT_TRUE(transport.waitForRequestCount(requestsPerElection, std::chrono::seconds(2)));
+    const std::uint64_t oldElectionTerm = transport.requestArgs(0).term;
 
-    // Wait until the next election has issued its two requests.
-    ASSERT_TRUE(transport.waitForRequestCount(4, std::chrono::seconds(2)));
-    ASSERT_GT(state.currentTerm, oldRequest.term);
-    const auto currentTerm = state.currentTerm;
+    // A second request round indicates that a newer election has started.
+    ASSERT_TRUE(transport.waitForRequestCount(2 * requestsPerElection, std::chrono::seconds(2)));
+    const State stateBeforeOldResponse = raftServer.getState();
+    ASSERT_GT(stateBeforeOldResponse.currentTerm, oldElectionTerm);
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Candidate);
 
-    transport.respond(0, {oldRequest.term, true});
+    transport.respond(0, {oldElectionTerm, true});
 
-    EXPECT_EQ(state.currentTerm, currentTerm);
+    const State stateAfterOldResponse = raftServer.getState();
+    EXPECT_EQ(stateAfterOldResponse.currentTerm, stateBeforeOldResponse.currentTerm);
     EXPECT_EQ(raftServer.getRaftState(), RaftState::Candidate);
 }
 
 TEST(RequestVoteCallback, IgnoresDuplicateResponsesFromSamePeer) {
-    State state;
+    State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    RaftServer raftServer(state, stateMachine, transport, {"peer-1", "peer-2", "peer-3", "peer-4"});
+    const std::vector<std::string> peerIds{"peer-1", "peer-2", "peer-3", "peer-4"};
+    RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
-    ASSERT_TRUE(transport.waitForRequestCount(4, std::chrono::seconds(2)));
-    const auto request = transport.requestArgs(0);
+    ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Candidate);
+
+    const RequestVoteArgs request = transport.requestArgs(0);
     transport.respond(0, {request.term, true});
-    transport.respond(0, {request.term, true}); // Duplicate response
-    EXPECT_EQ(raftServer.getRaftState(), RaftState::Candidate); // Not enough votes to become leader yet
+    transport.respond(0, {request.term, true}); // Duplicate response from the same peer
+    EXPECT_EQ(raftServer.getRaftState(), RaftState::Candidate);
 
     transport.respond(1, {request.term, true});
     EXPECT_EQ(raftServer.getRaftState(), RaftState::Leader);

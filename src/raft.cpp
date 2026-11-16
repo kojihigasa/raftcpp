@@ -6,13 +6,13 @@
 #include <set>
 #include <sstream>
 
-RaftServer::RaftServer(State& state, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds)
-    : state_(state),
+RaftServer::RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds)
+    : state_(std::move(initialState)),
       stateMachine_(stateMachine),
       transport_(transport),
       peerIds_(std::move(peerIds)),
       serverId_(generateUniqueServerId()),
-      lastEnqueued_(state.lastApplied) {
+      lastEnqueued_(state_.lastApplied) {
     // Initialize at the body of the constructor to ensure that the applyThread_ is started after all member variables are initialized.
     applyThread_ = std::thread(&RaftServer::applyLoop, this);
     electionTimeoutThread_ = std::thread(&RaftServer::electionTimeoutLoop, this);

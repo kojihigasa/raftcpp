@@ -88,7 +88,7 @@ public:
 
 class RaftServer {
 public:
-    RaftServer(State& state, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds);
+    RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds);
     ~RaftServer();
 
     const std::string& getServerId() const noexcept {
@@ -98,7 +98,11 @@ public:
     RequestVoteResults requestVote(const RequestVoteArgs& args);
     AppendEntriesResults appendEntries(const AppendEntriesArgs& args);
 
-    // Getter for the Raft state to be used in tests
+    State getState() const {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return state_;
+    }
+
     RaftState getRaftState() const {
         std::lock_guard<std::mutex> lock(stateMutex_);
         return raftState_;
@@ -114,7 +118,7 @@ private:
 
     static std::string generateUniqueServerId();
 
-    State& state_;
+    State state_;
     StateMachine& stateMachine_;
     RaftTransport& transport_;
     std::vector<std::string> peerIds_;
