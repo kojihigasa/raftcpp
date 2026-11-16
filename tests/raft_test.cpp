@@ -610,3 +610,19 @@ TEST(RequestVoteCallback, IgnoresResponseFromOlderElection) {
     EXPECT_EQ(state.currentTerm, currentTerm);
     EXPECT_EQ(raftServer.getRaftState(), RaftState::Candidate);
 }
+
+TEST(RequestVoteCallback, IgnoresDuplicateResponsesFromSamePeer) {
+    State state;
+    EmptyStateMachine stateMachine;
+    DeferredRaftTransport transport;
+    RaftServer raftServer(state, stateMachine, transport, {"peer-1", "peer-2", "peer-3", "peer-4"});
+
+    ASSERT_TRUE(transport.waitForRequestCount(4, std::chrono::seconds(2)));
+    const auto request = transport.requestArgs(0);
+    transport.respond(0, {request.term, true});
+    transport.respond(0, {request.term, true}); // Duplicate response
+    EXPECT_EQ(raftServer.getRaftState(), RaftState::Candidate); // Not enough votes to become leader yet
+
+    transport.respond(1, {request.term, true});
+    EXPECT_EQ(raftServer.getRaftState(), RaftState::Leader);
+}

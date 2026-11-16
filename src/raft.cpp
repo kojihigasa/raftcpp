@@ -3,6 +3,7 @@
 #include <array>
 #include <iomanip>
 #include <random>
+#include <set>
 #include <sstream>
 
 RaftServer::RaftServer(State& state, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds)
@@ -300,11 +301,15 @@ void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
         args.lastLogTerm = state_.log.empty() ? 0 : state_.log.back().term;
     }
 
-    const std::size_t majority = peerIds_.size() / 2 + 1;
-    auto votes = std::make_shared<std::atomic<std::size_t>>(1); // Count the vote for self
+    // Note: peerIds_.size() + 1 is used to include the server itself in the majority calculation
+    const std::size_t majority = (peerIds_.size() + 1) / 2 + 1;
+    // Use a shared pointer to a set to track the peers that have granted their votes to avoid double counting in case of duplicate responses
+    auto grantedPeers = std::make_shared<std::set<std::string>>();
+    grantedPeers->insert(serverId_); // Count self-vote
 
     for (const auto& peerId : peerIds_) {
-        transport_.sendRequestVote(peerId, args, [this, electionTerm, majority, votes](RequestVoteResults results) {
+        transport_.sendRequestVote(peerId, args,
+            [this, peerId, electionTerm, majority, grantedPeers](RequestVoteResults results) {
             std::lock_guard<std::mutex> lock(stateMutex_);
 
             // If the term in the response is greater than the current term, update the current term and transition to follower
@@ -324,8 +329,8 @@ void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
             }
 
             if (results.term == electionTerm && results.voteGranted) {
-                const std::size_t totalVotes = ++(*votes);
-                if (totalVotes >= majority) {
+                grantedPeers->insert(peerId);
+                if (grantedPeers->size() >= majority) {
                     raftState_ = RaftState::Leader;
                     state_.initializeLeaderState(peerIds_.size() + 1); // +1 for self
                 }
