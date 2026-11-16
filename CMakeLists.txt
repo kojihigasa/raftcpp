@@ -4,6 +4,8 @@ project(raft LANGUAGES CXX)
 
 include(CTest)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 add_library(raft src/raft.cpp)
 target_compile_features(raft PUBLIC cxx_std_20)
 target_include_directories(raft PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
