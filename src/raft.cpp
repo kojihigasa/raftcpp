@@ -19,23 +19,16 @@ RaftServer::RaftServer(State& state, StateMachine& stateMachine, RaftTransport& 
 }
 
 RaftServer::~RaftServer() {
-    {
-        std::lock_guard<std::mutex> lock(applyMutex_);
-        terminating_ = true;
-    }
-
-    applyCv_.notify_one();
+    terminating_.store(true);
+    // Note: Practically, notify_one() is sufficient because there is only one thread waiting on each condition variable,
+    //       but, notify_all() is easier to understand that all waiting threads should be notified to terminate,
+    //       and it is safer in case of future changes that introduce multiple waiting threads.
+    applyCv_.notify_all();
+    electionCv_.notify_all();
 
     if (applyThread_.joinable()) {
         applyThread_.join();
     }
-
-    {
-        std::lock_guard<std::mutex> lock(electionMutex_);
-        terminating_ = true;
-    }
-
-    electionCv_.notify_one();
 
     if (electionTimeoutThread_.joinable()) {
         electionTimeoutThread_.join();
@@ -200,7 +193,9 @@ AppendEntriesResults RaftServer::appendEntries(const AppendEntriesArgs& args) {
 }
 
 void RaftServer::applyLoop() {
-    while (!terminating_) {
+    // Note: Draining the applyQueue_ even when terminating_ is set to true to ensure
+    // that all committed log entries are applied to the state machine before the RaftServer is destroyed.
+    while (true) {
         std::unique_lock<std::mutex> lock(applyMutex_);
         applyCv_.wait(lock, [this] {
             return terminating_ || (!applyQueue_.empty() && !applyFailed_.has_value());
@@ -222,13 +217,17 @@ void RaftServer::applyLoop() {
             break;
         }
 
-        state_.lastApplied = index;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            state_.lastApplied = index;
+        }
     }
 }
 
 void RaftServer::enqueueCommittedEntries() {
     {
         std::lock_guard<std::mutex> lock(applyMutex_);
+        std::lock_guard<std::mutex> stateLock(stateMutex_);
         while (lastEnqueued_ < state_.commitIndex) {
             const std::uint32_t index = lastEnqueued_ + 1;
             applyQueue_.push({index, state_.log[index - 1]});

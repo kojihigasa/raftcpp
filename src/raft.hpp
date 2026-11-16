@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -127,7 +128,7 @@ private:
     // Unique identifier for the server
     std::string serverId_;
     // Flag to indicate that the RaftServer is being destroyed and the applyLoop should terminate
-    bool terminating_ = false;
+    std::atomic<bool> terminating_ = false;
 
     // Private members for asynchronous application of committed log entries to the state machine
     std::mutex applyMutex_;
