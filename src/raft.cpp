@@ -154,29 +154,36 @@ AppendEntriesResults RaftServer::appendEntries(const AppendEntriesArgs& args) {
         }
         electionCv_.notify_one();
 
+        const std::size_t previousLogIndex = args.prevLogIndex;
+
         // Check if the log contains an entry at prevLogIndex whose term matches prevLogTerm
         // Raft maintains the following property to ensure the consistency of logs on different servers:
         // If two entries in different logs have the same index and term, then the logs are identical in all preceding entries.
-        if (args.prevLogIndex > 0 && (args.prevLogIndex > static_cast<std::uint32_t>(state_.log.size()) ||
-                                      state_.log[args.prevLogIndex - 1].term != args.prevLogTerm)) {
+        if (previousLogIndex > 0 && (previousLogIndex > state_.log.size() ||
+                                      state_.log[previousLogIndex - 1].term != args.prevLogTerm)) {
             results.success = false;
             return results;
         }
 
         // If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
+        // e.g., in case that the previous leader fails after replicating an entry to only some servers,
+        // and a different server, which doesn't have the entry, is elected as the new leader. 
         for (std::size_t i = 0; i < args.entries.size(); i++) {
-            std::uint32_t logIndex = args.prevLogIndex + 1 + static_cast<std::uint32_t>(i);
-            if (logIndex <= static_cast<std::uint32_t>(state_.log.size())) {
-                if (state_.log[logIndex - 1].term != args.entries[i].term) {
-                    state_.log.resize(logIndex - 1);
-                    break;
-                }
+            const std::size_t logIndex = previousLogIndex + i;
+            if (logIndex >= state_.log.size()) {
+                break;
+            }
+
+            if (state_.log[logIndex].term != args.entries[i].term) {
+                state_.log.resize(logIndex);
+                break;
             }
         }
 
-        // Append any new entries not already in the log
-        for (const auto& entry : args.entries) {
-            state_.log.push_back(entry);
+        // Keep matching entries and append any new entries not already in the log
+        const std::size_t firstIndexToAppend = state_.log.size() - previousLogIndex;
+        for (std::size_t i = firstIndexToAppend; i < args.entries.size(); i++) {
+            state_.log.push_back(args.entries[i]);
         }
 
         if (args.leaderCommit > state_.commitIndex) {

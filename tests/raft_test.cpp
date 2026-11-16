@@ -331,6 +331,61 @@ TEST(AppendEntries, ReplacesMultipleConflictingEntries) {
     EXPECT_EQ(stateAfterAppend.log[2].command, "command3b");
 }
 
+TEST(AppendEntries, DoesNotDuplicateEntriesWhenRequestIsRepeated) {
+    State initialState{
+        .currentTerm = 1,
+        .log = {{"command1", 1}}
+    };
+    EmptyStateMachine stateMachine;
+    RaftTransportMock transport;
+    RaftServer raftServer(initialState, stateMachine, transport, {});
+
+    const AppendEntriesArgs appendArgs{
+        .term = 1,
+        .leaderId = "server1",
+        .prevLogIndex = 1,
+        .prevLogTerm = 1,
+        .entries = {{"command2", 1}},
+        .leaderCommit = 0
+    };
+
+    const AppendEntriesResults firstResponse = raftServer.appendEntries(appendArgs);
+    const AppendEntriesResults retryResponse = raftServer.appendEntries(appendArgs);
+    const State stateAfterRetry = raftServer.getState();
+
+    EXPECT_TRUE(firstResponse.success);
+    EXPECT_TRUE(retryResponse.success);
+    ASSERT_EQ(stateAfterRetry.log.size(), 2);
+    EXPECT_EQ(stateAfterRetry.log[1].command, "command2");
+}
+
+TEST(AppendEntries, AppendsOnlyEntriesMissingFromOverlappingRequest) {
+    State initialState{
+        .currentTerm = 1,
+        .log = {{"command1", 1}, {"command2", 1}}
+    };
+    EmptyStateMachine stateMachine;
+    RaftTransportMock transport;
+    RaftServer raftServer(initialState, stateMachine, transport, {});
+
+    const AppendEntriesArgs appendArgs{
+        .term = 1,
+        .leaderId = "server1",
+        .prevLogIndex = 1,
+        .prevLogTerm = 1,
+        .entries = {{"command2", 1}, {"command3", 1}},
+        .leaderCommit = 0
+    };
+
+    const AppendEntriesResults response = raftServer.appendEntries(appendArgs);
+    const State stateAfterAppend = raftServer.getState();
+
+    EXPECT_TRUE(response.success);
+    ASSERT_EQ(stateAfterAppend.log.size(), 3);
+    EXPECT_EQ(stateAfterAppend.log[1].command, "command2");
+    EXPECT_EQ(stateAfterAppend.log[2].command, "command3");
+}
+
 TEST(AppendEntries, CommitIndexFollowsLeaderCommitWhenWithinLog) {
     State initialState{
         .currentTerm = 1,
