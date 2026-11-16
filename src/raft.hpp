@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <queue>
 #include <mutex>
 #include <optional>
@@ -42,7 +43,6 @@ enum class RaftState : int {
 
 class StateMachine {
 public:
-    StateMachine() = default;
     virtual ~StateMachine() = default;
 
     // This method should be implemented by the user to apply a log entry to the state machine.
@@ -75,17 +75,33 @@ struct AppendEntriesResults {
     bool success;
 };
 
+using RequestVoteCallback = std::function<void(RequestVoteResults)>;
+
+class RaftTransport {
+public:
+    virtual ~RaftTransport() = default;
+
+    // This method should be implemented by the user to send a RequestVote RPC to another server.
+    virtual void sendRequestVote(const std::string& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) = 0;
+};
+
 class RaftServer {
 public:
-    RaftServer(State& state, StateMachine& stateMachine);
+    RaftServer(State& state, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds);
     ~RaftServer();
 
     const std::string& getServerId() const noexcept {
         return serverId_;
     }
 
-    RequestVoteResults handleRequestVote(const RequestVoteArgs& args);
-    AppendEntriesResults handleAppendEntries(const AppendEntriesArgs& args);
+    RequestVoteResults requestVote(const RequestVoteArgs& args);
+    AppendEntriesResults appendEntries(const AppendEntriesArgs& args);
+
+    // Getter for the Raft state to be used in tests
+    RaftState getRaftState() const {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return raftState_;
+    }
 
 private:
     void applyLoop();
@@ -93,13 +109,20 @@ private:
 
     void electionTimeoutLoop();
     std::chrono::milliseconds getRandomElectionTimeout() const;
+    void startElection(std::uint64_t expectedTimerGeneration);
 
     static std::string generateUniqueServerId();
 
     State& state_;
     StateMachine& stateMachine_;
+    RaftTransport& transport_;
+    std::vector<std::string> peerIds_;
 
     RaftState raftState_ = RaftState::Follower;
+
+    // Mutex to protect access to the Raft state
+    // Note: mutability is used to allow const getter to lock the mutex for thread-safe access to the Raft state.
+    mutable std::mutex stateMutex_;
 
     // Unique identifier for the server
     std::string serverId_;
