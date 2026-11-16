@@ -6,7 +6,7 @@
 #include <set>
 #include <sstream>
 
-RaftServer::RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds)
+RaftServer::RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<ServerId> peerIds)
     : state_(std::move(initialState)),
       stateMachine_(stateMachine),
       transport_(transport),
@@ -36,7 +36,7 @@ RaftServer::~RaftServer() {
 }
 
 // Generate a unique server ID using a UUIDv7 string.
-std::string RaftServer::generateUniqueServerId() {
+ServerId RaftServer::generateUniqueServerId() {
     std::array<unsigned char, 16> bytes{};
 
     // Get the current timestamp in milliseconds since the Unix epoch
@@ -101,7 +101,7 @@ RequestVoteResults RaftServer::requestVote(const RequestVoteArgs& args) {
         // or if the last log terms are equal, the candidate's last log index is greater than or equal to the receiver's last log index.
         bool logUpToDate = (args.lastLogTerm > (state_.log.empty() ? 0 : state_.log.back().term)) ||
                            (args.lastLogTerm == (state_.log.empty() ? 0 : state_.log.back().term) &&
-                            args.lastLogIndex >= static_cast<std::uint32_t>(state_.log.size()));
+                            args.lastLogIndex >= static_cast<std::uint64_t>(state_.log.size()));
 
         if ((!state_.votedFor.has_value() || state_.votedFor.value() == args.candidateId) && logUpToDate) {
             state_.votedFor = args.candidateId;
@@ -154,13 +154,14 @@ AppendEntriesResults RaftServer::appendEntries(const AppendEntriesArgs& args) {
         }
         electionCv_.notify_one();
 
-        const std::size_t previousLogIndex = args.prevLogIndex;
+        const std::size_t previousLogIndex = static_cast<std::size_t>(args.prevLogIndex);
 
         // Check if the log contains an entry at prevLogIndex whose term matches prevLogTerm
         // Raft maintains the following property to ensure the consistency of logs on different servers:
         // If two entries in different logs have the same index and term, then the logs are identical in all preceding entries.
-        if (previousLogIndex > 0 && (previousLogIndex > state_.log.size() ||
-                                      state_.log[previousLogIndex - 1].term != args.prevLogTerm)) {
+        if (previousLogIndex > 0 &&
+            (previousLogIndex > state_.log.size() ||
+             state_.log[previousLogIndex - 1].term != args.prevLogTerm)) {
             results.success = false;
             return results;
         }
@@ -187,7 +188,7 @@ AppendEntriesResults RaftServer::appendEntries(const AppendEntriesArgs& args) {
         }
 
         if (args.leaderCommit > state_.commitIndex) {
-            state_.commitIndex = std::min(args.leaderCommit, static_cast<std::uint32_t>(state_.log.size()));
+            state_.commitIndex = std::min(args.leaderCommit, static_cast<std::uint64_t>(state_.log.size()));
         }
     }
 
@@ -236,8 +237,8 @@ void RaftServer::enqueueCommittedEntries() {
         std::lock_guard<std::mutex> lock(applyMutex_);
         std::lock_guard<std::mutex> stateLock(stateMutex_);
         while (lastEnqueued_ < state_.commitIndex) {
-            const std::uint32_t index = lastEnqueued_ + 1;
-            applyQueue_.push({index, state_.log[index - 1]});
+            const std::uint64_t index = lastEnqueued_ + 1;
+            applyQueue_.push({index, state_.log[static_cast<std::size_t>(index - 1)]});
             lastEnqueued_ = index;
         }
     }
@@ -303,14 +304,14 @@ void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
 
         args.term = electionTerm;
         args.candidateId = serverId_;
-        args.lastLogIndex = static_cast<std::uint32_t>(state_.log.size());
+        args.lastLogIndex = static_cast<std::uint64_t>(state_.log.size());
         args.lastLogTerm = state_.log.empty() ? 0 : state_.log.back().term;
     }
 
     // Note: peerIds_.size() + 1 is used to include the server itself in the majority calculation
     const std::size_t majority = (peerIds_.size() + 1) / 2 + 1;
     // Use a shared pointer to a set to track the peers that have granted their votes to avoid double counting in case of duplicate responses
-    auto grantedPeers = std::make_shared<std::set<std::string>>();
+    auto grantedPeers = std::make_shared<std::set<ServerId>>();
     grantedPeers->insert(serverId_); // Count self-vote
 
     for (const auto& peerId : peerIds_) {

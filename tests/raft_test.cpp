@@ -14,7 +14,7 @@ public:
 
 class RaftTransportMock : public RaftTransport {
 public:
-    void sendRequestVote(const std::string& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) override {
+    void sendRequestVote(const ServerId& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) override {
         // For testing purposes, we can simulate a successful vote response with the same term and granted vote
         RequestVoteResults results;
         results.term = args.term;
@@ -29,7 +29,7 @@ TEST(GenerateUniqueServerId, ReturnsUuidV7FormattedId) {
     RaftTransportMock transport;
     RaftServer raftServer(initialState, stateMachine, transport, {});
 
-    const std::string serverId = raftServer.getServerId();
+    const ServerId serverId = raftServer.getServerId();
 
     const std::regex uuidV7Format(
         "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -46,8 +46,8 @@ TEST(GenerateUniqueServerId, GeneratesDistinctIdsForSeparateServers) {
     RaftServer firstServer(firstInitialState, stateMachine, transport, {});
     RaftServer secondServer(secondInitialState, stateMachine, transport, {});
 
-    const std::string firstServerId = firstServer.getServerId();
-    const std::string secondServerId = secondServer.getServerId();
+    const ServerId firstServerId = firstServer.getServerId();
+    const ServerId secondServerId = secondServer.getServerId();
     EXPECT_NE(firstServerId, secondServerId);
 }
 
@@ -583,12 +583,12 @@ TEST(AsyncApply, AppendEntriesReturnsWhileStateMachineIsBlocked) {
 class DeferredRaftTransport : public RaftTransport {
 public:
     struct PendingRequest {
-        std::string peerId;
+        ServerId peerId;
         RequestVoteArgs args;
         RequestVoteCallback callback;
     };
 
-    void sendRequestVote(const std::string& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) override {
+    void sendRequestVote(const ServerId& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) override {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             pending_.push_back({peerId, args, std::move(callback)});
@@ -627,7 +627,7 @@ TEST(RequestVoteCallback, BecomesLeaderAfterMajorityGrantsVote) {
     State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    const std::vector<ServerId> peerIds{"peer-1", "peer-2"};
     RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
     ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
@@ -645,7 +645,7 @@ TEST(RequestVoteCallback, RejectedVoteDoesNotMakeCandidateLeader) {
     State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    const std::vector<ServerId> peerIds{"peer-1", "peer-2"};
     RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
     ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
@@ -663,7 +663,7 @@ TEST(RequestVoteCallback, HigherTermResponseMakesServerFollower) {
     State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    const std::vector<ServerId> peerIds{"peer-1", "peer-2"};
     RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
     ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
@@ -683,7 +683,7 @@ TEST(RequestVoteCallback, IgnoresResponseFromOlderElection) {
     State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    const std::vector<std::string> peerIds{"peer-1", "peer-2"};
+    const std::vector<ServerId> peerIds{"peer-1", "peer-2"};
     const std::size_t requestsPerElection = peerIds.size();
     RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
@@ -707,7 +707,7 @@ TEST(RequestVoteCallback, IgnoresDuplicateResponsesFromSamePeer) {
     State initialState{};
     EmptyStateMachine stateMachine;
     DeferredRaftTransport transport;
-    const std::vector<std::string> peerIds{"peer-1", "peer-2", "peer-3", "peer-4"};
+    const std::vector<ServerId> peerIds{"peer-1", "peer-2", "peer-3", "peer-4"};
     RaftServer raftServer(initialState, stateMachine, transport, peerIds);
 
     ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));

@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+using ServerId = std::string;
+
 struct LogEntry {
     std::string command;
     std::uint64_t term;
@@ -21,16 +23,16 @@ struct LogEntry {
 
 struct State {
     std::uint64_t currentTerm = 0;
-    std::optional<std::string> votedFor;
+    std::optional<ServerId> votedFor;
     std::vector<LogEntry> log;
     // A log entry is committed once the leader that created the entry has replicated it on a majority of the servers
-    std::uint32_t commitIndex = 0;
-    std::uint32_t lastApplied = 0;
-    std::vector<std::uint32_t> nextIndex;
-    std::vector<std::uint32_t> matchIndex;
+    std::uint64_t commitIndex = 0;
+    std::uint64_t lastApplied = 0;
+    std::vector<std::uint64_t> nextIndex;
+    std::vector<std::uint64_t> matchIndex;
 
     void initializeLeaderState(std::size_t serverCount) {
-        const std::uint32_t nextLogIndex = static_cast<std::uint32_t>(log.size()) + 1;
+        const std::uint64_t nextLogIndex = static_cast<std::uint64_t>(log.size()) + 1;
         nextIndex.assign(serverCount, nextLogIndex);
         matchIndex.assign(serverCount, 0);
     }
@@ -52,8 +54,8 @@ public:
 
 struct RequestVoteArgs {
     std::uint64_t term;
-    std::string candidateId;
-    std::uint32_t lastLogIndex;
+    ServerId candidateId;
+    std::uint64_t lastLogIndex;
     std::uint64_t lastLogTerm;
 };
 
@@ -64,11 +66,11 @@ struct RequestVoteResults {
 
 struct AppendEntriesArgs {
     std::uint64_t term;
-    std::string leaderId;
-    std::uint32_t prevLogIndex;
+    ServerId leaderId;
+    std::uint64_t prevLogIndex;
     std::uint64_t prevLogTerm;
     std::vector<LogEntry> entries;
-    std::uint32_t leaderCommit;
+    std::uint64_t leaderCommit;
 };
 
 struct AppendEntriesResults {
@@ -83,15 +85,15 @@ public:
     virtual ~RaftTransport() = default;
 
     // This method should be implemented by the user to send a RequestVote RPC to another server.
-    virtual void sendRequestVote(const std::string& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) = 0;
+    virtual void sendRequestVote(const ServerId& peerId, const RequestVoteArgs& args, RequestVoteCallback callback) = 0;
 };
 
 class RaftServer {
 public:
-    RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<std::string> peerIds);
+    RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<ServerId> peerIds);
     ~RaftServer();
 
-    const std::string& getServerId() const noexcept {
+    const ServerId& getServerId() const noexcept {
         return serverId_;
     }
 
@@ -116,12 +118,12 @@ private:
     std::chrono::milliseconds getRandomElectionTimeout() const;
     void startElection(std::uint64_t expectedTimerGeneration);
 
-    static std::string generateUniqueServerId();
+    static ServerId generateUniqueServerId();
 
     State state_;
     StateMachine& stateMachine_;
     RaftTransport& transport_;
-    std::vector<std::string> peerIds_;
+    std::vector<ServerId> peerIds_;
 
     RaftState raftState_ = RaftState::Follower;
 
@@ -130,16 +132,16 @@ private:
     mutable std::mutex stateMutex_;
 
     // Unique identifier for the server
-    std::string serverId_;
+    ServerId serverId_;
     // Flag to indicate that the RaftServer is being destroyed and the applyLoop should terminate
     std::atomic<bool> terminating_ = false;
 
     // Private members for asynchronous application of committed log entries to the state machine
     std::mutex applyMutex_;
     std::condition_variable applyCv_;
-    std::queue<std::pair<std::uint32_t, LogEntry>> applyQueue_;
-    std::uint32_t lastEnqueued_ = 0; // The index of the last log entry that has been enqueued for application to the state machine
-    std::optional<std::uint32_t> applyFailed_; // The index of the first log entry that failed to be applied to the state machine
+    std::queue<std::pair<std::uint64_t, LogEntry>> applyQueue_;
+    std::uint64_t lastEnqueued_ = 0; // The index of the last log entry that has been enqueued for application to the state machine
+    std::optional<std::uint64_t> applyFailed_; // The index of the first log entry that failed to be applied to the state machine
     std::thread applyThread_; // Declare at the end to ensure proper construction order
 
     // Private memebers for election timeout detection
