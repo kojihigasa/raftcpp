@@ -1,18 +1,41 @@
 #include "raft.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <condition_variable>
 #include <iomanip>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <set>
 #include <sstream>
+#include <stdexcept>
+#include <thread>
+#include <utility>
+#include <vector>
 
-RaftServer::RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<ServerId> peerIds)
+RaftServer::RaftServer(
+    State initialState,
+    StateMachine& stateMachine,
+    RaftTransport& transport,
+    std::vector<ServerId> peerIds,
+    RaftConfig config
+)
     : state_(std::move(initialState)),
       stateMachine_(stateMachine),
       transport_(transport),
       peerIds_(std::move(peerIds)),
+      config_(config),
       serverId_(generateUniqueServerId()),
       lastEnqueued_(state_.lastApplied) {
+    if (config_.minElectionTimeout <= std::chrono::milliseconds::zero() ||
+        config_.minElectionTimeout > config_.maxElectionTimeout) {
+        throw std::invalid_argument("RaftConfig election timeout range is invalid");
+    }
+
+    electionTimeout_ = getRandomElectionTimeout();
     // Initialize at the body of the constructor to ensure that the applyThread_ is started after all member variables are initialized.
     applyThread_ = std::thread(&RaftServer::applyLoop, this);
     electionTimeoutThread_ = std::thread(&RaftServer::electionTimeoutLoop, this);
@@ -86,6 +109,8 @@ RequestVoteResults RaftServer::requestVote(const RequestVoteArgs& args) {
             results.voteGranted = false;
             return results;
         } else if (args.term > state_.currentTerm) {
+            const bool wasLeader = raftState_ == RaftState::Leader;
+
             state_.currentTerm = args.term;
             results.term = state_.currentTerm;
             // Reset votedFor when the term is updated to indicate that the server has not voted for any candidate in the new term.
@@ -94,6 +119,11 @@ RequestVoteResults RaftServer::requestVote(const RequestVoteArgs& args) {
             // Note: RequestVote RPCs are send to all servers, so they may be received by a server that is currently a candidate
             // or a leader who looks being unable to communicate with a majority of the servers in the cluster.
             raftState_ = RaftState::Follower;
+
+            // As aforementioned, RequestVote RPC may be sent to a leader, so we need to reset timer in that case.
+            if (wasLeader) {
+                resetElectionTimer();
+            }
         }
 
         // Check if the candidate's log is at least as up-to-date as the receiver's log
@@ -106,15 +136,9 @@ RequestVoteResults RaftServer::requestVote(const RequestVoteArgs& args) {
         if ((!state_.votedFor.has_value() || state_.votedFor.value() == args.candidateId) && logUpToDate) {
             state_.votedFor = args.candidateId;
             results.voteGranted = true;
-
             // A granted vote counts as activity during the election timeout.
-            // Restart the timer so this follower does not begin another election immediately.
-            {
-                std::lock_guard<std::mutex> electionLock(electionMutex_);
-                electionTimeout_ = getRandomElectionTimeout();
-                ++timerGeneration_;
-            }
-            electionCv_.notify_one();
+            // Reset the timer so this follower does not begin another election immediately.
+            resetElectionTimer();
         } else {
             results.voteGranted = false;
         }
@@ -156,12 +180,7 @@ AppendEntriesResults RaftServer::appendEntries(const AppendEntriesArgs& args) {
 
         // Reset the election timer when receiving AppendEntries RPCs from the leader with the valid term
         // to prevent unnecessary elections, even if the log entries are not appended due to log inconsistency.
-        {
-            std::lock_guard<std::mutex> lock(electionMutex_);
-            electionTimeout_ = getRandomElectionTimeout();
-            timerGeneration_++;
-        }
-        electionCv_.notify_one();
+        resetElectionTimer();
 
         const std::size_t previousLogIndex = static_cast<std::size_t>(args.prevLogIndex);
 
@@ -258,10 +277,17 @@ void RaftServer::enqueueCommittedEntries() {
 void RaftServer::electionTimeoutLoop() {
     std::unique_lock<std::mutex> lock(electionMutex_);
     while (!terminating_) {
+        if (!electionTimerEnabled_) {
+            electionCv_.wait(lock, [this] {
+                return terminating_ || electionTimerEnabled_;
+            });
+            continue;
+        }
+
         const std::uint64_t currentGeneration = timerGeneration_;
         const bool interrupted = electionCv_.wait_until(
             lock, std::chrono::steady_clock::now() + electionTimeout_, [this, currentGeneration] {
-                return terminating_ || timerGeneration_ != currentGeneration;
+                return terminating_ || !electionTimerEnabled_ || timerGeneration_ != currentGeneration;
             }
         );
 
@@ -287,15 +313,37 @@ void RaftServer::electionTimeoutLoop() {
 
 std::chrono::milliseconds RaftServer::getRandomElectionTimeout() const {
     static thread_local std::mt19937 generator(std::random_device{}());
-    std::uniform_int_distribution<int> distribution(150, 300); // Random timeout between 150ms and 300ms
+    using Rep = std::chrono::milliseconds::rep;
+    std::uniform_int_distribution<Rep> distribution(
+        config_.minElectionTimeout.count(), config_.maxElectionTimeout.count()
+    );
     return std::chrono::milliseconds(distribution(generator));
+}
+
+void RaftServer::resetElectionTimer() {
+    {
+        std::lock_guard<std::mutex> lock(electionMutex_);
+        electionTimeout_ = getRandomElectionTimeout();
+        electionTimerEnabled_ = true;
+        ++timerGeneration_;
+    }
+    electionCv_.notify_one();
+}
+
+void RaftServer::stopElectionTimer() {
+    {
+        std::lock_guard<std::mutex> lock(electionMutex_);
+        electionTimerEnabled_ = false;
+        ++timerGeneration_;
+    }
+    electionCv_.notify_one();
 }
 
 void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
     {
         std::lock_guard<std::mutex> lock(electionMutex_);
         // If the election timer has been reset since this election started, we should not start a new election
-        // e.g. in the case that the server received an AppendEntries RPC from a valid leader just after this election started.
+        // e.g. in the case that the server received an AppendEntries RPC from a valid leader just before this election started.
         if (expectedTimerGeneration != timerGeneration_ || terminating_) {
             return;
         }
@@ -306,6 +354,12 @@ void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
 
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
+
+        // A vote response may elect this server after the timeout expires but before this election starts.
+        // Do not let the timeout handler demote a server that has already become leader.
+        if (raftState_ == RaftState::Leader) {
+            return;
+        }
 
         raftState_ = RaftState::Candidate;
         electionTerm = ++state_.currentTerm;
@@ -330,15 +384,23 @@ void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
 
             // If the term in the response is greater than the current term, update the current term and transition to follower
             if (results.term > state_.currentTerm) {
+                const bool wasLeader = raftState_ == RaftState::Leader;
+
                 state_.currentTerm = results.term;
                 state_.votedFor.reset();
                 raftState_ = RaftState::Follower;
+
+                // The candidate may already promote to the leader with majority of votes before completing callback of a peer with higher term.
+                // So, we need to reset timer in that case because it has stopped.
+                if (wasLeader) {
+                    resetElectionTimer();
+                }
                 return;
             }
 
             // Ignore vote results that do not belong to the current election
             // Note: must check both the raftState_ and the currentTerm to ensure that the server is still a candidate.
-            // e.g., the server may have transitioned to a follower state after receiving an AppendEntries RPC
+            // e.g., the server may have transitioned to a follower state after receiving an AppendEntries RPC during this election
             // from a valid leader with the same term before callback execution with locking the stateMutex_.
             if (state_.currentTerm != electionTerm || raftState_ != RaftState::Candidate) {
                 return;
@@ -349,6 +411,7 @@ void RaftServer::startElection(std::uint64_t expectedTimerGeneration) {
                 if (grantedPeers->size() >= majority) {
                     raftState_ = RaftState::Leader;
                     state_.initializeLeaderState(peerIds_.size() + 1); // +1 for self
+                    stopElectionTimer();
                 }
             }
         });

@@ -80,6 +80,11 @@ struct AppendEntriesResults {
 
 using RequestVoteCallback = std::function<void(RequestVoteResults)>;
 
+struct RaftConfig {
+    std::chrono::milliseconds minElectionTimeout{150};
+    std::chrono::milliseconds maxElectionTimeout{300};
+};
+
 class RaftTransport {
 public:
     virtual ~RaftTransport() = default;
@@ -90,7 +95,13 @@ public:
 
 class RaftServer {
 public:
-    RaftServer(State initialState, StateMachine& stateMachine, RaftTransport& transport, std::vector<ServerId> peerIds);
+    RaftServer(
+        State initialState,
+        StateMachine& stateMachine,
+        RaftTransport& transport,
+        std::vector<ServerId> peerIds,
+        RaftConfig config = {}
+    );
     ~RaftServer();
 
     const ServerId& getServerId() const noexcept {
@@ -116,6 +127,8 @@ private:
 
     void electionTimeoutLoop();
     std::chrono::milliseconds getRandomElectionTimeout() const;
+    void resetElectionTimer();
+    void stopElectionTimer();
     void startElection(std::uint64_t expectedTimerGeneration);
 
     static ServerId generateUniqueServerId();
@@ -124,6 +137,7 @@ private:
     StateMachine& stateMachine_;
     RaftTransport& transport_;
     std::vector<ServerId> peerIds_;
+    RaftConfig config_;
 
     RaftState raftState_ = RaftState::Follower;
 
@@ -147,7 +161,8 @@ private:
     // Private memebers for election timeout detection
     std::mutex electionMutex_;
     std::condition_variable electionCv_;
-    std::chrono::milliseconds electionTimeout_ = std::chrono::milliseconds(150); // Base election timeout duration
+    std::chrono::milliseconds electionTimeout_; // Base election timeout duration
+    bool electionTimerEnabled_ = true;
     std::uint64_t timerGeneration_ = 0; // A counter to track the number of times the election timer has been reset
     std::thread electionTimeoutThread_; // Declare at the end to ensure proper construction order
 };

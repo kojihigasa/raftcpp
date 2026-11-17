@@ -1,6 +1,16 @@
 #include "../src/raft.hpp"
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <future>
+#include <mutex>
+#include <optional>
 #include <regex>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 #include <gtest/gtest.h>
 
 // Empty state machine implementation for RPC testing purposes.
@@ -720,4 +730,59 @@ TEST(RequestVoteCallback, IgnoresDuplicateResponsesFromSamePeer) {
 
     transport.respond(1, {request.term, true});
     EXPECT_EQ(raftServer.getRaftState(), RaftState::Leader);
+}
+
+TEST(ElectionTimer, GrantedVoteResetsElectionTimeout) {
+    State initialState{};
+    EmptyStateMachine stateMachine;
+    DeferredRaftTransport transport;
+    const RaftConfig config{
+        .minElectionTimeout = std::chrono::milliseconds(500),
+        .maxElectionTimeout = std::chrono::milliseconds(500)
+    };
+    RaftServer raftServer(initialState, stateMachine, transport, {"peer-1"}, config);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+    const RequestVoteArgs request{
+        .term = 1,
+        .candidateId = "peer-1",
+        .lastLogIndex = 0,
+        .lastLogTerm = 0
+    };
+    const RequestVoteResults response = raftServer.requestVote(request);
+    ASSERT_TRUE(response.voteGranted);
+
+    EXPECT_FALSE(transport.waitForRequestCount(1, std::chrono::milliseconds(200)));
+    EXPECT_TRUE(transport.waitForRequestCount(1, std::chrono::seconds(1)));
+}
+
+TEST(ElectionTimer, ResetsAfterLeaderStepsDown) {
+    State initialState{};
+    EmptyStateMachine stateMachine;
+    DeferredRaftTransport transport;
+    const std::vector<ServerId> peerIds{"peer-1", "peer-2"};
+    const RaftConfig config{
+        .minElectionTimeout = std::chrono::milliseconds(300),
+        .maxElectionTimeout = std::chrono::milliseconds(300)
+    };
+    RaftServer raftServer(initialState, stateMachine, transport, peerIds, config);
+
+    ASSERT_TRUE(transport.waitForRequestCount(peerIds.size(), std::chrono::seconds(2)));
+    const RequestVoteArgs electionRequest = transport.requestArgs(0);
+    transport.respond(0, {electionRequest.term, true});
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Leader);
+
+    const State leaderState = raftServer.getState();
+    EXPECT_FALSE(transport.waitForRequestCount(2 * peerIds.size(), std::chrono::milliseconds(350)));
+    EXPECT_EQ(raftServer.getState().currentTerm, leaderState.currentTerm);
+    EXPECT_EQ(raftServer.getRaftState(), RaftState::Leader);
+
+    const std::uint64_t higherTerm = electionRequest.term + 1;
+    transport.respond(1, {higherTerm, false});
+    ASSERT_EQ(raftServer.getRaftState(), RaftState::Follower);
+
+    EXPECT_FALSE(transport.waitForRequestCount(2 * peerIds.size(), std::chrono::milliseconds(200)));
+    ASSERT_TRUE(transport.waitForRequestCount(2 * peerIds.size(), std::chrono::seconds(1)));
+    EXPECT_GT(raftServer.getState().currentTerm, higherTerm);
 }
