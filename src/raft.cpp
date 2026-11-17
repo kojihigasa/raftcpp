@@ -106,6 +106,15 @@ RequestVoteResults RaftServer::requestVote(const RequestVoteArgs& args) {
         if ((!state_.votedFor.has_value() || state_.votedFor.value() == args.candidateId) && logUpToDate) {
             state_.votedFor = args.candidateId;
             results.voteGranted = true;
+
+            // A granted vote counts as activity during the election timeout.
+            // Restart the timer so this follower does not begin another election immediately.
+            {
+                std::lock_guard<std::mutex> electionLock(electionMutex_);
+                electionTimeout_ = getRandomElectionTimeout();
+                ++timerGeneration_;
+            }
+            electionCv_.notify_one();
         } else {
             results.voteGranted = false;
         }
